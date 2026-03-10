@@ -48,6 +48,7 @@ OUTPUT_TYPE = "rv"  # "coe" for classical orbital elements, "rv" for radial velo
 RANDOM_SEED = 42
 USE_TEST_SET = False
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+NUM_SEQ = 20
 
 # Search space for hyperparameter tuning
 NUM_SAMPLES = 10
@@ -67,7 +68,7 @@ MAX_EPOCHS = 15
 # Load the dataset
 data_path = Path(f"./data new/{OUTPUT_TYPE}_orbit_300164_timeseries.csv")
 
-def load_and_prepare_orbit_data(data_path):
+def load_and_prepare_orbit_data(data_path, NUM_SEQ):
     """
     Load and prepare the orbit dataset for training. The labels will be the future states, while the 
     features will be the current time. This function also normalizes the features that need it and 
@@ -76,32 +77,40 @@ def load_and_prepare_orbit_data(data_path):
     """
     # Load the dataset
     df = pd.read_csv(data_path)
+    if OUTPUT_TYPE == "coe":
+        feature_names = ["Semimajor Axis", "Eccentricity", "Inclination", "RAAN", "Argument of Perigee", "True Anomaly"]
+    if OUTPUT_TYPE == "rv":
+        feature_names = ["Rx", "Ry", "Rz", "Vx", "Vy", "Vz"]
+    else:
+        raise ValueError("Invalid OUTPUT_TYPE. Must be 'coe' or 'rv'.")
+    states = df[feature_names].values
+
+    # No cleaning needed except normalization, as well as no feature engineering needed.
+
+    # Normalize the features and labels
+    scaler = StandardScaler()
+    states_scaled = scaler.fit_transform(states)
+
+
+    # Create time series sequences
+    def create_sequences(states, num_seq):
+        X = []
+        y = []
+        for i in range(len(states) - num_seq):
+            X.append(states[i:i+num_seq])
+            y.append(states[i+num_seq])
+        return np.array(X), np.array(y)
     
-    # No cleaning needed except normalization, as well as no feature engineering needed. However, 
-    # the time feature needs to be converted from datetime to a numeric value.
-    df["time"] = pd.to_datetime(df["time"])
-    t0 = df["time"].iloc[0]
-    df["t_seconds"] = (df["time"] - t0).dt.total_seconds()
+    X_seq, y_seq = create_sequences(states_scaled, NUM_SEQ)
 
+    
 
-    # Normalize
-    X = df[["t_seconds"]].values # Time is the feature
-    y = df.drop("time", axis=1).values # The coes or rv values are the labels
-    feature_names = df.drop("time", axis=1).columns.tolist()
-    X_scaler = MinMaxScaler() # Time is a large value since its 6 years of data and the time step should be linear, plus normalizing it between 0 and 1 is better for vanishing gradient issues.
-    X_scaled = X_scaler.fit_transform(X)
-    y_scaler = StandardScaler() # StandarScaler should work for coes and rv values.
-    y_scaled = y_scaler.fit_transform(y)
 
     # Time to split the data into train, valid, and test sets. I will use a 75-15-15 split.
-    X_train_val, X_test, y_train_val, y_test = train_test_split(X_scaled, y_scaled, test_size = 0.15, shuffle = False)
+    X_train_val, X_test, y_train_val, y_test = train_test_split(X_seq, y_seq, test_size = 0.15, shuffle = False)
     X_train, X_val, y_train, y_val = train_test_split(X_train_val, y_train_val, test_size = 0.1765, shuffle = False)
 
     # Construct datasets
-    y_train = torch.tensor(y_train, dtype=torch.float32)
-    y_val = torch.tensor(y_val, dtype=torch.float32)
-    y_test = torch.tensor(y_test, dtype=torch.float32)
-
     train_dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32))
     val_dataset = TensorDataset(torch.tensor(X_val, dtype=torch.float32), torch.tensor(y_val, dtype = torch.float32))
     test_dataset = TensorDataset(torch.tensor(X_test, dtype=torch.float32), torch.tensor(y_test, dtype = torch.float32))
@@ -135,11 +144,13 @@ class GRUPredictor(nn.Module):
             dropout: float = 0.0
     ):
         super(GRUPredictor, self).__init__()
+
         self.config = {
             "hidden_size": hidden_size,
             "num_layers": num_layers,
             "dropout": dropout
         }
+
         self.gru = nn.GRU(input_size, self.config["hidden_size"], self.config["num_layers"], batch_first=True, dropout=self.config["dropout"])
         self.fc = nn.Linear(self.config["hidden_size"], 6)
 
@@ -164,22 +175,20 @@ def train_one_epoch(
     Trains model for one epoch
     """
     model.train()
-    running_total_loss = 0.0
-    correct = 0.0
-    total_predictions = 0.0
+    train_loss = 0.0
 
     for batch in train_loader:
         X_batch, y_batch = batch
         X_batch, y_batch = X_batch.to(device), y_batch.to(device)
 
         optimizer.zero_grad()
-        outputs = model(X_batch)
-        loss = criterion(outputs, y_batch)
+        preds = model(X_batch)
+        loss = criterion(preds, y_batch)
         loss.backward()
         optimizer.step()
 
-        running_total_loss += loss.item() * X_batch.size(0)
-        _, predicted = torch.max(outputs.data, 1)
+        train_loss += loss.item()
+        _, predicted = torch.max(preds.data, 1)
         correct += (predicted == y_batch).sum().item()
 
 
