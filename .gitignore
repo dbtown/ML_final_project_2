@@ -1,0 +1,8 @@
+*.pyc
+*.log
+
+logs/
+
+data/*
+!data/.gitkeep
+wandb/
