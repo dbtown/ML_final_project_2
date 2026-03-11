@@ -194,7 +194,9 @@ def train_epoch(
         optimizer.step()
 
         train_loss += loss.item()
-    return train_loss / len(train_loader)
+    train_loss /= len(train_loader)
+    train_rmse = np.sqrt(train_loss)
+    return train_loss, train_rmse
 
 # ============================================================================
 # Step 5: Evaluation
@@ -218,12 +220,14 @@ def evaluate(
             preds = model(X_batch)
             loss = criterion(preds, y_batch)
             val_loss += loss.item()
-    return val_loss / len(val_loader)
+    val_loss /= len(val_loader)
+    val_rmse = np.sqrt(val_loss)
+    return val_loss, val_rmse
 
 # ============================================================================
 # Step 6: Tune the Model
 # ============================================================================
-def get_search_space_optuna(trial: optuna.Trial):
+def get_search_space(trial: optuna.Trial):
     """
     Define search space for optuna search
     """
@@ -235,11 +239,11 @@ def get_search_space_optuna(trial: optuna.Trial):
     }
     return config
 
-def optuna_objective(trial: optuna.Trial):
+def search_objective(trial: optuna.Trial):
     """
     Optuna obj func
     """
-    config = get_search_space_optuna(trial)
+    config = get_search_space(trial)
     train_dataset, val_dataset = load_and_prepare_orbit_data(data_path, NUM_SEQ)
     train_loader, val_loader = construct_dataloaders(train_dataset, val_dataset, batch_size = config["batch_size"])
     model = create_model(config)
@@ -248,32 +252,57 @@ def optuna_objective(trial: optuna.Trial):
     criterion = nn.MSELoss()
     optimizer = optim.Adam(model.parameters(), lr=config["lr"])
     
-    best_val_acc = 0.0
+    best_val_rmse = 10000.0
     progress_bar = tqdm(range(MAX_EPOCHS), desc = f"Trial {trial.number}", leave = False)
         
     for step in range(MAX_EPOCHS):
-        train_loss = train_epoch(model, train_loader, criterion, optimizer, DEVICE)
-        val_loss = evaluate(model, val_loader, criterion, DEVICE)
+        train_loss, train_rmse = train_epoch(model, train_loader, criterion, optimizer, DEVICE)
+        val_loss, val_rmse = evaluate(model, val_loader, criterion, DEVICE)
 
-        best_val_acc = min(val_loss)
-        progress_bar.set_postfix(
+        best_val_rmse = min(best_val_rmse, val_rmse)
+        progress_bar.set_postfix({"val_rmse": f"{val_rmse:.2f}%", "new best": f"{best_val_rmse:.2f}%"})
 
-
-        
-    trial.report(
+    trial.report(val_rmse, step)
     if trial.should_prune():
         raise optuna.TrialPruned()
 
-return best_val_acc
+    return best_val_rmse
 
-                           
+def run_search(n_trails: int = NUM_SAMPLES):
+    """
+    Run the search! Direction is minimize because we are working with RMSE.
+    """
+    # Create the study
+    study = optuna.create_study(direction="minimize", pruner = optuna.pruners.MedianPruner(n_startup_trials = 2, n_warmup_steps=3))
+
+    # WandB
+    callbacks =[]
+    if USE_WANDB:
+        wandb_callback = WeightsAndBiasesCallback(
+            metric_name = "best_val_RMSE",
+            wandb_kwargs = {"project": WANDB_PROJECT_NAME},
+            as_multirun = True
+        )
+        callbacks.append(wandb_callback)
+    # Optimization
+    study.optimize(search_objective, n_trials = n_trails, callbacks=callbacks, show_progress_bar=True)
+
+    print(f"\nBest RMSE: {study.best_trial.value:.2f}%")
+    for key, value in study.best_trial.params.items():
+        print(f"    {key}: {value}")
     
-
-
+    return study
 
 # ============================================================================
 # Step 7: Present Results
 # ============================================================================
+def main():
+    """
+    Run the whole thing wooo
+    """
+    optuna_study = run_search(n_trials=NUM_SAMPLES)
+
+main()
 
 
 
