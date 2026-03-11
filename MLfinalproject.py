@@ -9,14 +9,13 @@ measurements for a set of satellites. The goal is to train a model that can accu
 predict future orbital states based on historical data.
 
 This project follows Chollet's 7-step machine learning workflow, which includes:
-1. Defining the problem and assembling the data
-2. Preparing the data
-3. Developing a model
-4. Training the model
-5. Evaluating the model
+1. Data Collection
+2. Preparation
+3. Choosing a Model
+4. Training
+5. Evaluation
 6. Tuning the model
-7. Presenting the results
-
+7. Deployment/Results
 
 """
 
@@ -57,13 +56,13 @@ MAX_EPOCHS = 15
 
 
 # ============================================================================
-# Step 1: Assemble the Data
+# Step 1: Data Collection
 # ============================================================================
 # Done.
 
 
 # ============================================================================
-# Step 2: Data Wrangling
+# Step 2: Data Preparation
 # ============================================================================
 # Load the dataset
 data_path = Path(f"./data new/{OUTPUT_TYPE}_orbit_300164_timeseries.csv")
@@ -103,9 +102,6 @@ def load_and_prepare_orbit_data(data_path, NUM_SEQ):
     
     X_seq, y_seq = create_sequences(states_scaled, NUM_SEQ)
 
-    
-
-
     # Time to split the data into train, valid, and test sets. I will use a 75-15-15 split.
     X_train_val, X_test, y_train_val, y_test = train_test_split(X_seq, y_seq, test_size = 0.15, shuffle = False)
     X_train, X_val, y_train, y_val = train_test_split(X_train_val, y_train_val, test_size = 0.1765, shuffle = False)
@@ -117,7 +113,7 @@ def load_and_prepare_orbit_data(data_path, NUM_SEQ):
 
     return train_dataset, val_dataset, test_dataset, feature_names
 
-def construct_dataloaders(train_dataset, val_dataset, test_dataset, batch_size: int = 32):
+def construct_dataloaders(train_dataset, val_dataset, test_dataset, batch_size):
     """
     Constructs dataloaders in the proper formatting.
     """
@@ -129,7 +125,7 @@ def construct_dataloaders(train_dataset, val_dataset, test_dataset, batch_size: 
 
 
 # ============================================================================
-# Step 3: Develop Model
+# Step 3: Choose Model
 # ============================================================================
 class GRUPredictor(nn.Module):
     """
@@ -138,7 +134,6 @@ class GRUPredictor(nn.Module):
 
     def __init__(
             self,
-            input_size: int,
             hidden_size: int,
             num_layers: int,
             dropout: float = 0.0
@@ -151,7 +146,7 @@ class GRUPredictor(nn.Module):
             "dropout": dropout
         }
 
-        self.gru = nn.GRU(input_size, self.config["hidden_size"], self.config["num_layers"], batch_first=True, dropout=self.config["dropout"])
+        self.gru = nn.GRU(6, self.config["hidden_size"], self.config["num_layers"], batch_first=True, dropout=self.config["dropout"])
         self.fc = nn.Linear(self.config["hidden_size"], 6)
 
     def forward(self, x):
@@ -160,11 +155,22 @@ class GRUPredictor(nn.Module):
 
         return output
     
+def create_model(config: Dict[str, Any]):
+    """
+    Create model from a dictionary
+    """
+    model = GRUPredictor(
+        hidden_size = config["hidden_size"],
+        num_layers = config["num_layers"],
+        dropout = config["dropout"]
+    )
+    return model
+
 
 # ============================================================================
-# Step 4: Train the Model
+# Step 4: Training
 # ============================================================================
-def train_one_epoch(
+def train_epoch(
         model: nn.Module,
         train_loader: DataLoader,
         criterion: nn.Module,
@@ -188,17 +194,82 @@ def train_one_epoch(
         optimizer.step()
 
         train_loss += loss.item()
-        _, predicted = torch.max(preds.data, 1)
-        correct += (predicted == y_batch).sum().item()
-
+    return train_loss / len(train_loader)
 
 # ============================================================================
-# Step 5: Evaluate the Model
+# Step 5: Evaluation
 # ============================================================================
+def evaluate(
+        model: nn.Module,
+        val_loader: DataLoader,
+        criterion: nn.Module,
+        device: torch.device
+):
+    """
+    Evaluation loop
+    """
+    model.eval()
+    val_loss = 0.0
+
+    with torch.no_grad():
+        for batch in val_loader:
+            X_batch, y_batch = batch
+            X_batch, y_batch = X_batch.to(device), y_batch.to(device)
+            preds = model(X_batch)
+            loss = criterion(preds, y_batch)
+            val_loss += loss.item()
+    return val_loss / len(val_loader)
 
 # ============================================================================
 # Step 6: Tune the Model
 # ============================================================================
+def get_search_space_optuna(trial: optuna.Trial):
+    """
+    Define search space for optuna search
+    """
+    config = {
+        "lr": trial.suggest_float("lr", 1e-5, 1e-2, log=True),
+        "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128]),
+        "dropout": trial.suggest_float("dropout", 0.0, 0.5),
+        "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128])
+    }
+    return config
+
+def optuna_objective(trial: optuna.Trial):
+    """
+    Optuna obj func
+    """
+    config = get_search_space_optuna(trial)
+    train_dataset, val_dataset = load_and_prepare_orbit_data(data_path, NUM_SEQ)
+    train_loader, val_loader = construct_dataloaders(train_dataset, val_dataset, batch_size = config["batch_size"])
+    model = create_model(config)
+    model = model.to(DEVICE)
+    
+    criterion = nn.MSELoss()
+    optimizer = optim.Adam(model.parameters(), lr=config["lr"])
+    
+    best_val_acc = 0.0
+    progress_bar = tqdm(range(MAX_EPOCHS), desc = f"Trial {trial.number}", leave = False)
+        
+    for step in range(MAX_EPOCHS):
+        train_loss = train_epoch(model, train_loader, criterion, optimizer, DEVICE)
+        val_loss = evaluate(model, val_loader, criterion, DEVICE)
+
+        best_val_acc = min(val_loss)
+        progress_bar.set_postfix(
+
+
+        
+    trial.report(
+    if trial.should_prune():
+        raise optuna.TrialPruned()
+
+return best_val_acc
+
+                           
+    
+
+
 
 # ============================================================================
 # Step 7: Present Results
