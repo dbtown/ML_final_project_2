@@ -27,6 +27,8 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from torch.utils.data import Dataset, DataLoader, TensorDataset
 from pathlib import Path
 from sklearn.model_selection import train_test_split
+from scipy.integrate import solve_ivp
+from tqdm import tqdm
 
 #Pytorch
 import torch
@@ -46,14 +48,14 @@ USE_TEST_SET = False
 OUTPUT_TYPE = "rv"  # "coe" for classical orbital elements, "rv" for radial velocity data
 RUN_BASELINE = False
 
-
-
 # Constants
 WANDB_PROJECT_NAME = "ML Final Project - Orbit Prediction Using GRU Cells"
 RANDOM_SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Data Configuration
 TIME_STEPS = 20
-NUM_SEQ = TIME_STEPS* 6 #amount of state parameters
+NUM_SEQ = TIME_STEPS
 
 
 # Search space for hyperparameter tuning
@@ -64,31 +66,52 @@ MAX_EPOCHS = 15
 # BASELINE: CR3BP Numerical Integration
 # ============================================================================
 
-def cr3bp_eom(t, state, mu)
+def cr3bp_eom(t, state, mu):
     x,y,z,vx,vy,vz = state
     r1 = np.sqrt((x+mu)**2 + y**2 + z**2)
     r2 = np.sqrt((x - (1-mu))**2 + y**2+z**2)
 
-    ax = 2*vy+x \
-        - (1-mu)*(x+mu)/r1**3 \
-        - mu*(x-(1-mu))/r2**3
+    ax = 2*vy+x- (1-mu)*(x+mu)/r1**3 - mu*(x-(1-mu))/r2**3
     
-    ay = -2*vx+y \ 
-        - (1-mu)*y/r1**3 \
-        - mu*y/r2**3
+    ay = -2*vx+y - (1-mu)*y/r1**3 - mu*y/r2**3
+
+    az = -(1-mu)*z/r1**3 - mu*z/r2**3
 
     return np.array([vx,vy,vz,ax,ay,az])
 
 if RUN_BASELINE:
     mu = 0.0121505856
+    # Load the dataset
+    df = pd.read_csv(data_path)
+    if OUTPUT_TYPE == "coe":
+        feature_names = ["Semimajor Axis", "Eccentricity", "Inclination", "RAAN", "Argument of Perigee", "True Anomaly"]
+    if OUTPUT_TYPE == "rv":
+        feature_names = ["Rx", "Ry", "Rz", "Vx", "Vy", "Vz"]
+    else:
+        raise ValueError("Invalid OUTPUT_TYPE for BASELINE. Must be 'rv'.")
+    
+    states = df[feature_names].values
+
+    #Needs to be first value in test set and get RMSE for each step.
     state0 = []
-    t = []
+
+    #Need to take the correct time steps
+    times = df["Time"].values
+    test_indice = 0 #for now
+    t0 = times[test_indice]
+    t_eval = np.array([
+        (t-t0).total_seconds()
+        for t in times
+    ])
+
+    t_span = (t_eval[0], t_eval[-1])
 
     sol = solve_ivp(
         cr3bp_eom,
-        t,
+        t_span,
         state0,
         args=(mu,),
+        t_eval=t_eval,
         rtol = 1e-12,
         atol = 1e-8
     )
@@ -194,7 +217,7 @@ class GRUPredictor(nn.Module):
 
         return output
     
-def create_model(config: Dict[str, Any]):
+def create_model(config):
     """
     Create model from a dictionary
     """
@@ -272,6 +295,7 @@ def get_search_space(trial: optuna.Trial):
     """
     config = {
         "lr": trial.suggest_float("lr", 1e-5, 1e-2, log=True),
+        "num_layers": trial.suggest_categorical("num_layers" [2, 3, 4]),
         "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128]),
         "dropout": trial.suggest_float("dropout", 0.0, 0.5),
         "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128])
@@ -299,7 +323,7 @@ def search_objective(trial: optuna.Trial):
         val_loss, val_rmse = evaluate(model, val_loader, criterion, DEVICE)
 
         best_val_rmse = min(best_val_rmse, val_rmse)
-        progress_bar.set_postfix({"val_rmse": f"{val_rmse:.2f}%", "new best": f"{best_val_rmse:.2f}%"})
+        progress_bar.set_postfix({"val_rmse": f"{val_rmse:.4f}%", "new best": f"{best_val_rmse:.4f}%"})
 
     trial.report(val_rmse, step)
     if trial.should_prune():
@@ -326,7 +350,7 @@ def run_search(n_trails: int = NUM_SAMPLES):
     # Optimization
     study.optimize(search_objective, n_trials = n_trails, callbacks=callbacks, show_progress_bar=True)
 
-    print(f"\nBest RMSE: {study.best_trial.value:.2f}%")
+    print(f"\nBest RMSE: {study.best_trial.value:.4f}")
     for key, value in study.best_trial.params.items():
         print(f"    {key}: {value}")
     
@@ -340,8 +364,29 @@ def main():
     Run the whole thing wooo
     """
     optuna_study = run_search(n_trials=NUM_SAMPLES)
+    best_params = optuna_study.best_trial.params
+
+    if USE_TEST_SET:
+        train_ds, val_ds, test_ds, _ = load_and_prepare_orbit_data(data_path, NUM_SEQ)
+        _, _, test_loader = construct_dataloaders(train_ds, val_ds, test_ds, best_params)
+        best_config = {
+            "hidden_size": best_params["hidden_size"],
+            "num_layers": best_params["num_layers"],
+            "dropout": best_params["dropout"]
+        }
+        
+        best_model = create_model(best_config).to(DEVICE)
+
+        # Testing eval
+        criterion = nn.MSELoss()
+        test_loss, test_rmse = evaluate(best_model, test_loader, criterion, DEVICE)
+        print(f"Test RMSE: {test_rmse:.4f}")
+
 
 main()
+
+if USE_TEST_SET:
+
 
 
 
