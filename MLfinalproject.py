@@ -47,6 +47,7 @@ USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
 USE_TEST_SET = False
 OUTPUT_TYPE = "rv"  # "coe" for classical orbital elements, "rv" for radial velocity data
 RUN_BASELINE = False
+RUN_MAIN = True
 
 # Constants
 WANDB_PROJECT_NAME = "ML Final Project - Orbit Prediction Using GRU Cells"
@@ -61,59 +62,6 @@ NUM_SEQ = 20 #How many steps is the training window
 NUM_SAMPLES = 10
 MAX_EPOCHS = 15
 
-# ============================================================================
-# BASELINE: CR3BP Numerical Integration
-# ============================================================================
-
-def cr3bp_eom(t, state, mu):
-    x,y,z,vx,vy,vz = state
-    r1 = np.sqrt((x+mu)**2 + y**2 + z**2)
-    r2 = np.sqrt((x - (1-mu))**2 + y**2+z**2)
-
-    ax = 2*vy+x- (1-mu)*(x+mu)/r1**3 - mu*(x-(1-mu))/r2**3
-    
-    ay = -2*vx+y - (1-mu)*y/r1**3 - mu*y/r2**3
-
-    az = -(1-mu)*z/r1**3 - mu*z/r2**3
-
-    return np.array([vx,vy,vz,ax,ay,az])
-
-if RUN_BASELINE:
-    mu = 0.0121505856
-    # Load the dataset
-    df = pd.read_csv(data_path)
-    if OUTPUT_TYPE == "coe":
-        feature_names = ["Semimajor Axis", "Eccentricity", "Inclination", "RAAN", "Argument of Perigee", "True Anomaly"]
-    if OUTPUT_TYPE == "rv":
-        feature_names = ["Rx", "Ry", "Rz", "Vx", "Vy", "Vz"]
-    else:
-        raise ValueError("Invalid OUTPUT_TYPE for BASELINE. Must be 'rv'.")
-    
-    states = df[feature_names].values
-
-    #Needs to be first value in test set and get RMSE for each step.
-    state0 = []
-
-    #Need to take the correct time steps
-    times = df["Time"].values
-    test_indice = 0 #for now
-    t0 = times[test_indice]
-    t_eval = np.array([
-        (t-t0).total_seconds()
-        for t in times
-    ])
-
-    t_span = (t_eval[0], t_eval[-1])
-
-    sol = solve_ivp(
-        cr3bp_eom,
-        t_span,
-        state0,
-        args=(mu,),
-        t_eval=t_eval,
-        rtol = 1e-12,
-        atol = 1e-8
-    )
 
 
 # ============================================================================
@@ -185,6 +133,56 @@ def construct_dataloaders(train_dataset, val_dataset, test_dataset, batch_size):
     return train_loader, val_loader, test_loader
 
 
+# ============================================================================
+# BASELINE: CR3BP Numerical Integration
+# ============================================================================
+
+def cr3bp_eom(t, state, mu):
+    x,y,z,vx,vy,vz = state
+    r1 = np.sqrt((x+mu)**2 + y**2 + z**2)
+    r2 = np.sqrt((x - (1-mu))**2 + y**2+z**2)
+
+    ax = 2*vy+x- (1-mu)*(x+mu)/r1**3 - mu*(x-(1-mu))/r2**3
+    
+    ay = -2*vx+y - (1-mu)*y/r1**3 - mu*y/r2**3
+
+    az = -(1-mu)*z/r1**3 - mu*z/r2**3
+
+    return np.array([vx,vy,vz,ax,ay,az])
+
+def run_baseline(data_path):
+    df_all = pd.read_csv(data_path)
+    test_start_idx = 44709 #either 44709 or 44710, 44709.15
+    df = df_all.iloc[test_start_idx:]
+    df["Time"] = pd.to_datetime(df["Time"])
+
+    feature_names = ["Rx", "Ry", "Rz", "Vx", "Vy", "Vz"]
+    actual_states = df["feature_names"].values
+
+    #Time steps
+    t_start = df["Time"].iloc[0]
+    t_eval = (df['Time']-t_start).dt.total_seconds().values
+    t_span = (t_eval[0], t_eval[-1])
+
+    state0 = actual_states[0]
+
+    print(f"Integrating trajectory for {len(t_eval)} time steps")
+    sol = solve_ivp(
+        cr3bp_eom,
+        t_span,
+        state0,
+        args=(mu,),
+        t_eval=t_eval,
+        rtol = 1e-12,
+        atol = 1e-12
+    )
+    predicts = sol.y.T
+    mse = np.mean((actual_states-predicts)**2)
+    rmse = np.sqrt(rmse)
+
+    print(f"Baseline RAN!!")
+    print(f"Final RMSE: {rmse:.4f}")
+        
 # ============================================================================
 # Step 3: Choose Model
 # ============================================================================
@@ -381,8 +379,10 @@ def main():
         test_loss, test_rmse = evaluate(best_model, test_loader, criterion, DEVICE)
         print(f"Test RMSE: {test_rmse:.4f}")
 
+if RUN_MAIN:
+    main()
 
-main()
+if RUN_BASELINE:
 
 
 
