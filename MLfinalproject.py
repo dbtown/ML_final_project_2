@@ -295,7 +295,7 @@ def get_search_space(trial: optuna.Trial):
     """
     config = {
         "lr": trial.suggest_float("lr", 1e-5, 1e-2, log=True),
-        "num_layers": trial.suggest_categorical("num_layers" [2, 3, 4]),
+        "num_layers": trial.suggest_categorical("num_layers", [2, 3, 4]),
         "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128]),
         "dropout": trial.suggest_float("dropout", 0.0, 0.5),
         "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128])
@@ -307,8 +307,8 @@ def search_objective(trial: optuna.Trial):
     Optuna obj func
     """
     config = get_search_space(trial)
-    train_dataset, val_dataset = load_and_prepare_orbit_data(data_path, NUM_SEQ)
-    train_loader, val_loader = construct_dataloaders(train_dataset, val_dataset, batch_size = config["batch_size"])
+    train_dataset, val_dataset, _, _ = load_and_prepare_orbit_data(data_path, NUM_SEQ)
+    train_loader, val_loader, _ = construct_dataloaders(train_dataset, val_dataset, _, batch_size = config["batch_size"])
     model = create_model(config)
     model = model.to(DEVICE)
     
@@ -318,12 +318,12 @@ def search_objective(trial: optuna.Trial):
     best_val_rmse = 10000.0
     progress_bar = tqdm(range(MAX_EPOCHS), desc = f"Trial {trial.number}", leave = False)
         
-    for step in range(MAX_EPOCHS):
+    for step in progress_bar:
         train_loss, train_rmse = train_epoch(model, train_loader, criterion, optimizer, DEVICE)
         val_loss, val_rmse = evaluate(model, val_loader, criterion, DEVICE)
 
         best_val_rmse = min(best_val_rmse, val_rmse)
-        progress_bar.set_postfix({"val_rmse": f"{val_rmse:.4f}%", "new best": f"{best_val_rmse:.4f}%"})
+        progress_bar.set_postfix({"val_rmse": f"{val_rmse:.4f}", "new best": f"{best_val_rmse:.4f}"})
 
     trial.report(val_rmse, step)
     if trial.should_prune():
@@ -331,7 +331,7 @@ def search_objective(trial: optuna.Trial):
 
     return best_val_rmse
 
-def run_search(n_trails: int = NUM_SAMPLES):
+def run_search(n_trials: int = NUM_SAMPLES):
     """
     Run the search! Direction is minimize because we are working with RMSE.
     """
@@ -348,7 +348,7 @@ def run_search(n_trails: int = NUM_SAMPLES):
         )
         callbacks.append(wandb_callback)
     # Optimization
-    study.optimize(search_objective, n_trials = n_trails, callbacks=callbacks, show_progress_bar=True)
+    study.optimize(search_objective, n_trials = n_trials, callbacks=callbacks, show_progress_bar=True)
 
     print(f"\nBest RMSE: {study.best_trial.value:.4f}")
     for key, value in study.best_trial.params.items():
@@ -384,9 +384,6 @@ def main():
 
 
 main()
-
-if USE_TEST_SET:
-
 
 
 
