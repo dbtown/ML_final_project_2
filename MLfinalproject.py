@@ -40,19 +40,58 @@ from optuna.integration import WeightsAndBiasesCallback
 #Weights & Biases
 import wandb
 
-# Flags and constants
-USE_WANDB = False  # Set to True to use Weights & Biases for experiment tracking
-WANDB_PROJECT_NAME = "ML Final Project - Orbit Prediction Using GRU Cells"
-OUTPUT_TYPE = "rv"  # "coe" for classical orbital elements, "rv" for radial velocity data
-RANDOM_SEED = 42
+# Flags
+USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
 USE_TEST_SET = False
+OUTPUT_TYPE = "rv"  # "coe" for classical orbital elements, "rv" for radial velocity data
+RUN_BASELINE = False
+
+
+
+# Constants
+WANDB_PROJECT_NAME = "ML Final Project - Orbit Prediction Using GRU Cells"
+RANDOM_SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-NUM_SEQ = 20
+TIME_STEPS = 20
+NUM_SEQ = TIME_STEPS* 6 #amount of state parameters
+
 
 # Search space for hyperparameter tuning
 NUM_SAMPLES = 10
 MAX_EPOCHS = 15
 
+# ============================================================================
+# BASELINE: CR3BP Numerical Integration
+# ============================================================================
+
+def cr3bp_eom(t, state, mu)
+    x,y,z,vx,vy,vz = state
+    r1 = np.sqrt((x+mu)**2 + y**2 + z**2)
+    r2 = np.sqrt((x - (1-mu))**2 + y**2+z**2)
+
+    ax = 2*vy+x \
+        - (1-mu)*(x+mu)/r1**3 \
+        - mu*(x-(1-mu))/r2**3
+    
+    ay = -2*vx+y \ 
+        - (1-mu)*y/r1**3 \
+        - mu*y/r2**3
+
+    return np.array([vx,vy,vz,ax,ay,az])
+
+if RUN_BASELINE:
+    mu = 0.0121505856
+    state0 = []
+    t = []
+
+    sol = solve_ivp(
+        cr3bp_eom,
+        t,
+        state0,
+        args=(mu,),
+        rtol = 1e-12,
+        atol = 1e-8
+    )
 
 
 # ============================================================================
