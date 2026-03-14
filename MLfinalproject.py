@@ -54,8 +54,7 @@ RANDOM_SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Data Configuration
-TIME_STEPS = 20
-NUM_SEQ = TIME_STEPS
+NUM_SEQ = 20 #How many steps is the training window
 
 
 # Search space for hyperparameter tuning
@@ -368,7 +367,7 @@ def main():
 
     if USE_TEST_SET:
         train_ds, val_ds, test_ds, _ = load_and_prepare_orbit_data(data_path, NUM_SEQ)
-        _, _, test_loader = construct_dataloaders(train_ds, val_ds, test_ds, best_params)
+        _, _, test_loader = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
         best_config = {
             "hidden_size": best_params["hidden_size"],
             "num_layers": best_params["num_layers"],
