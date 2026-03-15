@@ -29,23 +29,20 @@ from pathlib import Path
 from sklearn.model_selection import train_test_split
 from scipy.integrate import solve_ivp
 from tqdm import tqdm
-
 #Pytorch
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
 #Hyperparameter tuning
 import optuna
 from optuna.integration import WeightsAndBiasesCallback
-
 #Weights & Biases
 import wandb
 
 # Flags
 USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
 OUTPUT_TYPE = "rv"  # "coe" for classical orbital elements, "rv" for radial velocity data
-RUN_OPTUNA_SEARCH = False
+RUN_OPTUNA_SEARCH = True
 RUN_BASELINE = True
 RUN_TEST_SET = False
 
@@ -56,9 +53,8 @@ RANDOM_SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Data Configuration
-NUM_SEQ = 20 #How many steps is the training window
+NUM_SEQ = 200 #How many steps is the training window
 PRED_STEPS = 20 ######How many steps to predict, if you change this you have to change GRU output size as well!!!!
-
 
 # Search space for hyperparameter tuning
 NUM_SAMPLES = 10
@@ -66,10 +62,11 @@ MAX_EPOCHS = 15
 
 
 
+
 # ============================================================================
 # Step 1: Data Collection
 # ============================================================================
-# Done.
+# Done :D
 
 
 # ============================================================================
@@ -133,36 +130,6 @@ def construct_dataloaders(train_dataset, val_dataset, test_dataset, batch_size):
     test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     return train_loader, val_loader, test_loader
-
-
-# ============================================================================
-# BASELINE: CR3BP Numerical Integration
-# ============================================================================
-# pbar = tqdm(total=100, desc="Integrating Orbit", unit="%")
-# last_pct = 0
-
-# def cr3bp_eom(t, state, t_final):
-#     #progress bar
-#     global last_pct
-#     current_pct = int((t/t_final)*100)
-#     if current_pct > last_pct:
-#         pbar.update(current_pct-last_pct)
-#         last_pct = current_pct
-
-#     #Constants and EOMs
-#     mu = 0.0121505856
-#     x,y,z,vx,vy,vz = state
-#     r1 = np.sqrt((x+mu)**2 + y**2 + z**2)
-#     r2 = np.sqrt((x - (1-mu))**2 + y**2+z**2)
-
-#     ax = 2*vy+x- (1-mu)*(x+mu)/r1**3 - mu*(x-(1-mu))/r2**3
-
-#     ay = -2*vx+y - (1-mu)*y/r1**3 - mu*y/r2**3
-
-#     az = -(1-mu)*z/r1**3 - mu*z/r2**3
-
-#     return np.array([vx,vy,vz,ax,ay,az])
-    
         
 # ============================================================================
 # Step 3: Choose Model
@@ -309,9 +276,6 @@ def search_objective(trial: optuna.Trial):
     trial.report(val_rmse, step)
     if trial.should_prune():
         raise optuna.TrialPruned()
-    if USE_WANDB:
-        wandb.log({"best_val_RMSE": best_val_rmse})
-
     return best_val_rmse
 
 def run_search(n_trials: int = NUM_SAMPLES):
@@ -366,15 +330,17 @@ def two_body_j2(t, state):
     a_total = a_2b+a_j2
 
     return np.hstack((v, a_total))
+
 def prop_20_steps(initial_state, dt, steps=20):
     t_span = (0, steps*dt)
     t_eval = np.linspace(0, steps*dt, steps+1)
-
+    print(f"started the integration")
     sol = solve_ivp(
         two_body_j2,
-        t_span,
-        initial_state,
-        t_eval,
+        t_span=t_span,
+        y0=initial_state,
+        method="RK45",
+        t_eval=t_eval,
         rtol = 1e-9,
         atol = 1e-9
     )
@@ -418,13 +384,14 @@ def visualize_predictions(model, val_loader, scaler, dt):
     ax.legend()
 
     plt.show()
+    fig.savefig(Path(f"./figures/Position Plot"))
 
     gru_error = np.linalg.norm(gru_r-truth_r, axis=1)
     baseline_error = np.linalg.norm(baseline_r-truth_r, axis=1)
 
     t = np.arange(len(gru_error))
 
-    plt.figure()
+    fig2 = plt.figure()
     plt.plot(t, gru_error, label = "GRU Error")
     plt.plot(t, baseline_error, label = "Two Body + J2 Error")
     plt.xlabel("Future Timestep")
@@ -432,6 +399,7 @@ def visualize_predictions(model, val_loader, scaler, dt):
 
     plt.legend()
     plt.show()
+    fig2.savefig(Path(f"./figures/Error Plot"))
 
 # ============================================================================
 # Step 7: Present Results
@@ -497,6 +465,34 @@ main()
 
 
 
+# ============================================================================
+# BASELINE: CR3BP Numerical Integration
+# ============================================================================
+# pbar = tqdm(total=100, desc="Integrating Orbit", unit="%")
+# last_pct = 0
+
+# def cr3bp_eom(t, state, t_final):
+#     #progress bar
+#     global last_pct
+#     current_pct = int((t/t_final)*100)
+#     if current_pct > last_pct:
+#         pbar.update(current_pct-last_pct)
+#         last_pct = current_pct
+
+#     #Constants and EOMs
+#     mu = 0.0121505856
+#     x,y,z,vx,vy,vz = state
+#     r1 = np.sqrt((x+mu)**2 + y**2 + z**2)
+#     r2 = np.sqrt((x - (1-mu))**2 + y**2+z**2)
+
+#     ax = 2*vy+x- (1-mu)*(x+mu)/r1**3 - mu*(x-(1-mu))/r2**3
+
+#     ay = -2*vx+y - (1-mu)*y/r1**3 - mu*y/r2**3
+
+#     az = -(1-mu)*z/r1**3 - mu*z/r2**3
+
+#     return np.array([vx,vy,vz,ax,ay,az])
+    
 # if RUN_BASELINE:
 #     df_all = pd.read_csv(data_path)
 #     test_start_idx = 44709 #either 44709 or 44710, 44709.15
