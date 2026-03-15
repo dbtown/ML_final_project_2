@@ -53,12 +53,12 @@ RANDOM_SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Data Configuration
-NUM_SEQ = 2000 #How many steps is the training window
+NUM_SEQ = 10 #How many steps is the training window
 PRED_STEPS = 5 ######How many steps to predict, if you change this you have to change GRU output size as well!!!!
 
 # Search space for hyperparameter tuning
 NUM_SAMPLES = 10
-MAX_EPOCHS = 15
+MAX_EPOCHS = 100
 
 
 
@@ -245,9 +245,9 @@ def get_search_space(trial: optuna.Trial):
     #Hidden size also started to show strong correlations by trial 3 that lower hidden_size made for best results.
     config = {
         "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),  #Trial 1: 1e-6, 1e-3, very low learning rates do not perform well.    #Trial 2: 1e-5, 1e-2 extreme lows definitely mean poor performance #Trial 3: 1e-4,1e-2 definitely dominates performance
-        "num_layers": trial.suggest_categorical("num_layers", [2, 3, 4]), #Trial 1: 2,3,4, whenever the learning rate wasn't really low, the higher layers seemed to perform better  #Trial 2: 3,4,5 seems like it doesnt matter too much, if any favor the lower end. expanding the search. #Trial 3: 1,2,3,4,5 Its clear now that lower layers are better. shrinking.
+        "num_layers": trial.suggest_categorical("num_layers", [2, 3]), #Trial 1: 2,3,4, whenever the learning rate wasn't really low, the higher layers seemed to perform better  #Trial 2: 3,4,5 seems like it doesnt matter too much, if any favor the lower end. expanding the search. #Trial 3: 1,2,3,4,5 Its clear now that lower layers are better. shrinking. #Trial 6: 2,3,4 only good ones seem to be in layers 2 and 3
         "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128]), #Trial 1: didnt seem to matter   #Trial 2: didnt seem to matter   #Trial 3: 32,64,128 Lower seems better
-        "dropout": trial.suggest_float("dropout", 0.0, 0.3), #Trial 1: didnt seem to matter   #Trial 2: didnt seem to matter   #Trial 3: 0,0,5 between 0.1 and 0.35 seems optimal
+        "dropout": trial.suggest_float("dropout", 0.0, 0.2), #Trial 1: didnt seem to matter   #Trial 2: didnt seem to matter   #Trial 3: 0,0,5 between 0.0 and 0.2 seems optimal
         "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]) #Trial 1: didnt seem to matter    #Trial 2: didnt seem to matter    #Trial 3: no correlation
     }
     return config
