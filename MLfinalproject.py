@@ -41,8 +41,13 @@ import wandb
 
 # Flags
 USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
+<<<<<<< HEAD
 USE_COE = True  # "coe" for classical orbital elements, "rv" for radial velocity data
 RUN_OPTUNA_SEARCH = False
+=======
+OUTPUT_TYPE = "rv"  # "coe" for classical orbital elements, "rv" for radial velocity data
+RUN_OPTUNA_SEARCH = True
+>>>>>>> parent of 2663ed7 (Long run of 100 max epochs did fix anything)
 RUN_BASELINE = True
 RUN_TEST_SET = False
 
@@ -53,12 +58,16 @@ RANDOM_SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Data Configuration
+<<<<<<< HEAD
 NUM_SEQ = 100 #How many steps is the training window
+=======
+NUM_SEQ = 10 #How many steps is the training window
+>>>>>>> parent of 2663ed7 (Long run of 100 max epochs did fix anything)
 PRED_STEPS = 5 ######How many steps to predict, if you change this you have to change GRU output size as well!!!!
 
 # Search space for hyperparameter tuning
 NUM_SAMPLES = 10
-MAX_EPOCHS = 15
+MAX_EPOCHS = 100
 
 
 
@@ -387,40 +396,6 @@ def prop_20_steps(initial_state, dt, steps=PRED_STEPS):
     future_states = sol.y.T[1:]
     return future_states
 
-def coes_to_rv(elements, MU = 398600.4418e9):
-    a,e,i,raan,argp,nu = elements
-
-    p = a*(1-e**2)
-    h = np.sqrt(MU*p)
-    r_mag = p/(1+e*np.cos(nu))
-    r_pqw = np.array([
-        r_mag*np.cos(nu),
-        r_mag*np.sin(nu),
-        0
-    ])
-
-    v_pqw = np.array([
-        (MU/h)*-np.sin(nu),
-        (MU/h)*(e+np.cos(nu)),
-        0
-    ])
-    c0,s0 = np.cos(raan),np.sin(raan)
-    ci,si = np.cos(i), np.sin(i)
-    cw,sw = np.cos(argp), np.sin(argp)
-
-    R = np.array([
-        [c0*cw-s0*sw*ci, -c0*sw-s0*cw*ci, s0*si],
-        [s0*cw+c0*sw*ci, -s0*sw+c0*cw*ci, -c0*si],
-        [sw*si, cw*si, ci]
-    ])
-
-    r_ijk = R @ r_pqw
-    v_ijk = R @ v_pqw
-
-    states = np.concatenate([r_ijk, v_ijk])
-
-    return states
-
 def visualize_predictions(model, val_loader, scaler, dt):
     model.eval()
 
@@ -439,6 +414,7 @@ def visualize_predictions(model, val_loader, scaler, dt):
     initial_states10d = scaler.inverse_transform(X_example[0,-1,:].cpu().numpy().reshape(1,-1)).flatten()
 
 
+<<<<<<< HEAD
     # pred_future = scaler.inverse_transform(pred_np)
     # truth_future = scaler.inverse_transform(truth_future)
 
@@ -474,6 +450,8 @@ def visualize_predictions(model, val_loader, scaler, dt):
     else:
         print("not implemented yet, make edits")
 
+=======
+>>>>>>> parent of 2663ed7 (Long run of 100 max epochs did fix anything)
     baseline_future = prop_20_steps(initial_state,dt)
 
     truth_r = truth_future[:,:3]
