@@ -309,6 +309,8 @@ def search_objective(trial: optuna.Trial):
     trial.report(val_rmse, step)
     if trial.should_prune():
         raise optuna.TrialPruned()
+    if USE_WANDB:
+        wandb.log({"best_val_RMSE": best_val_rmse})
 
     return best_val_rmse
 
@@ -377,6 +379,7 @@ def prop_20_steps(initial_state, dt, steps=20):
         atol = 1e-9
     )
     future_states = sol.y.T[1:]
+    return future_states
 
 def visualize_predictions(model, val_loader, scaler, dt):
     model.eval()
@@ -387,10 +390,10 @@ def visualize_predictions(model, val_loader, scaler, dt):
     truth_future = y_batch[0].cpu().numpy()
 
     with torch.no_grad():
-        pred_future = model(X_example)
-    pred_future.detach().cpu().numpy()[0]
+        pred_raw = model(X_example)
+        pred_np = pred_raw.detach().cpu().numpy()[0]
 
-    pred_future = scaler.inverse_transform(pred_future)
+    pred_future = scaler.inverse_transform(pred_np)
     truth_future = scaler.inverse_transform(truth_future)
 
     initial_states_scaled = X_example[0,-1,:].cpu().numpy()
