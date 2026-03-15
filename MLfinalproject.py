@@ -44,10 +44,11 @@ import wandb
 
 # Flags
 USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
-USE_TEST_SET = False
 OUTPUT_TYPE = "rv"  # "coe" for classical orbital elements, "rv" for radial velocity data
-RUN_BASELINE = True
-RUN_MAIN = False
+RUN_OPTUNA_SEARCH = True
+RUN_BASELINE = False
+RUN_TEST_SET = False
+
 
 # Constants
 WANDB_PROJECT_NAME = "ML Final Project - Orbit Prediction Using GRU Cells"
@@ -285,7 +286,7 @@ def search_objective(trial: optuna.Trial):
     Optuna obj func
     """
     config = get_search_space(trial)
-    train_dataset, val_dataset, _, _, _ = load_and_prepare_orbit_data(data_path, NUM_SEQ)
+    train_dataset, val_dataset, _, _, _ = load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
     train_loader, val_loader, _ = construct_dataloaders(train_dataset, val_dataset, _, batch_size = config["batch_size"])
     model = create_model(config)
     model = model.to(DEVICE)
@@ -430,50 +431,53 @@ def visualize_predictions(model, val_loader, scaler, dt):
 # ============================================================================
 # Step 7: Present Results
 # ============================================================================
+def save_model(model, config, path="best_gru_model.pth"):
+    torch.save({
+        "model_state_dict": model.state_dict(),
+        "config": config
+    }, path)
+    print(f"Model save to {path}")
+
+def load_model(path="best_gru_model.pth"):
+    checkpoint = torch.load(path, map_location=DEVICE)
+    config = checkpoint["config"]
+    model = create_model(config)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model = model.to(DEVICE)
+    model.eval()
+    return model, config
 
 def main():
     """
     Run the whole thing wooo
     """
-    optuna_study = run_search(n_trials=NUM_SAMPLES)
-    best_params = optuna_study.best_trial.params
+    if RUN_OPTUNA_SEARCH:
+        optuna_study = run_search(n_trials=NUM_SAMPLES)
+        best_params = optuna_study.best_trial.params
+        save_model(model, best_params)
 
     if RUN_BASELINE:
-        train_ds, val_ds, test_ds, _, scaler = load_and_prepare_orbit_data(data_path, NUM_SEQ)
+        train_ds, val_ds, test_ds, _, scaler = load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
         _, val_loader, _ = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
-        best_config = {
-            "hidden_size": best_params["hidden_size"],
-            "num_layers": best_params["num_layers"],
-            "dropout": best_params["dropout"]
-        }
-        
-        model = create_model(best_config).to(DEVICE)
 
+        model, config = load_model(path="best_gru_model.pth")
         dt = 3599.178006
         visualize_predictions(model, val_loader, scaler, dt)
 
-    if USE_TEST_SET:
-        train_ds, val_ds, test_ds, _, _= load_and_prepare_orbit_data(data_path, NUM_SEQ)
+    if RUN_TEST_SET:
+        train_ds, val_ds, test_ds, _, _= load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
         _, _, test_loader = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
-        best_config = {
-            "hidden_size": best_params["hidden_size"],
-            "num_layers": best_params["num_layers"],
-            "dropout": best_params["dropout"]
-        }
-        
-        best_model = create_model(best_config).to(DEVICE)
+
+        best_model, config = load_model(path="best_gru_model.pth")
 
         # Testing eval
         criterion = nn.MSELoss()
         test_loss, test_rmse = evaluate(best_model, test_loader, criterion, DEVICE)
         print(f"Test RMSE: {test_rmse:.4f}")
 
-if RUN_MAIN:
-    main()
 
-# ============================================================================
-# Step 8: Baseline Physics Model
-# ============================================================================
+
+main()
 
 
 
