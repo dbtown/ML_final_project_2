@@ -41,8 +41,8 @@ import wandb
 
 # Flags
 USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
-OUTPUT_TYPE = "coe"  # "coe" for classical orbital elements, "rv" for radial velocity data
-RUN_OPTUNA_SEARCH = True
+USE_COE = True  # "coe" for classical orbital elements, "rv" for radial velocity data
+RUN_OPTUNA_SEARCH = False
 RUN_BASELINE = True
 RUN_TEST_SET = False
 
@@ -73,8 +73,10 @@ MAX_EPOCHS = 15
 # Step 2: Data Preparation
 # ============================================================================
 # Load the dataset
-data_path = Path(f"./data new/{OUTPUT_TYPE}_orbit_300164_timeseries.csv")
-data_path_rv = Path(f"./data new/rv_orbit_300164_timeseries.csv")        #Add rv path for the baseline but try inputting coes into the GRU, also create coes to rv to plot GRU's rvs
+if USE_COE:
+    data_path = Path(f"./data new/coe_orbit_300164_timeseries.csv")
+if USE_COE == False:
+    data_path_rv = Path(f"./data new/rv_orbit_300164_timeseries.csv")        #Add rv path for the baseline but try inputting coes into the GRU, also create coes to rv to plot GRU's rvs
 
 def angle_to_sin_cos(data):
     a = data[:, 0:1]
@@ -92,11 +94,11 @@ def angle_to_sin_cos(data):
         np.sin(raan_angle), np.cos(raan_angle),
         np.sin(argp_angle), np.cos(argp_angle),
         np.sin(nu_angle), np.cos(nu_angle),
-    ])
+    ], axis=1)
 
 def sin_cos_to_angle(data_10d):
     a = data_10d[...,0:1]
-    e = data_10d[...,0:1]
+    e = data_10d[...,1:2]
 
     def get_angle(sin_val, cos_val):
         angle = np.arctan2(sin_val, cos_val)
@@ -117,16 +119,16 @@ def load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS):
     """
     # Load the dataset
     df = pd.read_csv(data_path)
-    if OUTPUT_TYPE == "coe":
+    if USE_COE:
         feature_names = ["Semimajor Axis", "Eccentricity", "Inclination", "RAAN", "Argument of Perigee", "True Anomaly"]
         states = df[feature_names].values
         states = angle_to_sin_cos(states)
         feature_names = ["a", "e", "si", "ci", "sraan", "craan", "sargp", "cargp", "snu","cnu"]
-    elif OUTPUT_TYPE == "rv":
+    elif USE_COE == False:
         feature_names = ["Rx", "Ry", "Rz", "Vx", "Vy", "Vz"]
         states = df[feature_names].values
     # else:
-    #     raise ValueError("Invalid OUTPUT_TYPE. Must be 'coe' or 'rv'.")
+    #     raise ValueError("Invalid USE_COE. Must be 'coe' or 'rv'.")
     
 
     # No cleaning needed except normalization, as well as no feature engineering needed.
@@ -189,7 +191,7 @@ class GRUPredictor(nn.Module):
             "num_layers": num_layers,
             "dropout": dropout
         }
-        self.input_dim = 10 if OUTPUT_TYPE == "coe" else 6
+        self.input_dim = 10 if USE_COE else 6
 
         self.gru = nn.GRU(self.input_dim, self.config["hidden_size"], self.config["num_layers"], batch_first=True, dropout=self.config["dropout"])
         self.fc = nn.Linear(self.config["hidden_size"], self.input_dim*PRED_STEPS)
@@ -434,7 +436,7 @@ def visualize_predictions(model, val_loader, scaler, dt):
     #New stuff
     pred_future10d = scaler.inverse_transform(pred_np)
     truth_future10d = scaler.inverse_transform(truth_future_scaled)
-    initial_states10d = scaler.inverse_transform(X_example[0,-1,:].cpu().numpy().reshape(1,-1)[0])
+    initial_states10d = scaler.inverse_transform(X_example[0,-1,:].cpu().numpy().reshape(1,-1)).flatten()
 
 
     # pred_future = scaler.inverse_transform(pred_np)
@@ -445,11 +447,12 @@ def visualize_predictions(model, val_loader, scaler, dt):
 
     
 
-    if OUTPUT_TYPE == "coe":
+    if USE_COE:
         pred_future = sin_cos_to_angle(pred_future10d)
         truth_future = sin_cos_to_angle(truth_future10d)
-        initial_state = sin_cos_to_angle(initial_states10d.reshape(1,-1))[0]
-
+        print(initial_states10d)
+        initial_state = sin_cos_to_angle(initial_states10d.reshape(1,-1)).flatten()
+        print(initial_state)
         coe_error = np.abs(pred_future - truth_future)
         print("Mean Error in a:", np.mean(coe_error[:,0]))
         print("Mean Error in e:", np.mean(coe_error[:,1]))
