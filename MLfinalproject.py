@@ -53,8 +53,8 @@ RANDOM_SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Data Configuration
-NUM_SEQ = 200 #How many steps is the training window
-PRED_STEPS = 20 ######How many steps to predict, if you change this you have to change GRU output size as well!!!!
+NUM_SEQ = 2000 #How many steps is the training window
+PRED_STEPS = 5 ######How many steps to predict, if you change this you have to change GRU output size as well!!!!
 
 # Search space for hyperparameter tuning
 NUM_SAMPLES = 10
@@ -74,6 +74,8 @@ MAX_EPOCHS = 15
 # ============================================================================
 # Load the dataset
 data_path = Path(f"./data new/{OUTPUT_TYPE}_orbit_300164_timeseries.csv")
+data_path_rv = Path(f"./data new/rv_orbit_300164_timeseries.csv")        #Add rv path for the baseline but try inputting coes into the GRU, also create coes to rv to plot GRU's rvs
+
 
 def load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS):
     """
@@ -154,12 +156,12 @@ class GRUPredictor(nn.Module):
         }
 
         self.gru = nn.GRU(6, self.config["hidden_size"], self.config["num_layers"], batch_first=True, dropout=self.config["dropout"])
-        self.fc = nn.Linear(self.config["hidden_size"], 6*20)
+        self.fc = nn.Linear(self.config["hidden_size"], 6*5)
 
     def forward(self, x):
         output, hidden = self.gru(x)
         output = self.fc(output[:,-1,:])
-        output = output.view(-1, 20, 6)
+        output = output.view(-1, 5, 6)
 
         return output
     
@@ -243,9 +245,9 @@ def get_search_space(trial: optuna.Trial):
     #Hidden size also started to show strong correlations by trial 3 that lower hidden_size made for best results.
     config = {
         "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),  #Trial 1: 1e-6, 1e-3, very low learning rates do not perform well.    #Trial 2: 1e-5, 1e-2 extreme lows definitely mean poor performance #Trial 3: 1e-4,1e-2 definitely dominates performance
-        "num_layers": trial.suggest_categorical("num_layers", [1, 2, 3]), #Trial 1: 2,3,4, whenever the learning rate wasn't really low, the higher layers seemed to perform better  #Trial 2: 3,4,5 seems like it doesnt matter too much, if any favor the lower end. expanding the search. #Trial 3: 1,2,3,4,5 Its clear now that lower layers are better. shrinking.
+        "num_layers": trial.suggest_categorical("num_layers", [2, 3, 4]), #Trial 1: 2,3,4, whenever the learning rate wasn't really low, the higher layers seemed to perform better  #Trial 2: 3,4,5 seems like it doesnt matter too much, if any favor the lower end. expanding the search. #Trial 3: 1,2,3,4,5 Its clear now that lower layers are better. shrinking.
         "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128]), #Trial 1: didnt seem to matter   #Trial 2: didnt seem to matter   #Trial 3: 32,64,128 Lower seems better
-        "dropout": trial.suggest_float("dropout", 0.0, 0.5), #Trial 1: didnt seem to matter   #Trial 2: didnt seem to matter   #Trial 3: 0,0,5 between 0.1 and 0.35 seems optimal
+        "dropout": trial.suggest_float("dropout", 0.0, 0.3), #Trial 1: didnt seem to matter   #Trial 2: didnt seem to matter   #Trial 3: 0,0,5 between 0.1 and 0.35 seems optimal
         "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]) #Trial 1: didnt seem to matter    #Trial 2: didnt seem to matter    #Trial 3: no correlation
     }
     return config
@@ -331,7 +333,7 @@ def two_body_j2(t, state):
 
     return np.hstack((v, a_total))
 
-def prop_20_steps(initial_state, dt, steps=20):
+def prop_20_steps(initial_state, dt, steps=PRED_STEPS):
     t_span = (0, steps*dt)
     t_eval = np.linspace(0, steps*dt, steps+1)
     print(f"started the integration")
