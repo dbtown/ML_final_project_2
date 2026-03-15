@@ -388,7 +388,7 @@ def visualize_predictions(model, val_loader, scaler, dt):
 
     with torch.no_grad():
         pred_future = model(X_example)
-    pred_future.cpu().numpy()[0]
+    pred_future.detach().cpu().numpy()[0]
 
     pred_future = scaler.inverse_transform(pred_future)
     truth_future = scaler.inverse_transform(truth_future)
@@ -460,18 +460,17 @@ def main():
         save_model(model, best_params)
 
     if RUN_BASELINE:
+        best_model, best_params = load_model(path="best_gru_model.pth")
         train_ds, val_ds, test_ds, _, scaler = load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
         _, val_loader, _ = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
 
-        model, config = load_model(path="best_gru_model.pth")
-        dt = 3599.178006
-        visualize_predictions(model, val_loader, scaler, dt)
+        dt = 3599.178006 #calculated
+        visualize_predictions(best_model, val_loader, scaler, dt)
 
     if RUN_TEST_SET:
+        best_model, best_params = load_model(path="best_gru_model.pth")
         train_ds, val_ds, test_ds, _, _= load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
         _, _, test_loader = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
-
-        best_model, config = load_model(path="best_gru_model.pth")
 
         # Testing eval
         criterion = nn.MSELoss()
