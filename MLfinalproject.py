@@ -273,7 +273,7 @@ def get_search_space(trial: optuna.Trial):
     Define search space for optuna search
     """
     config = {
-        "lr": trial.suggest_float("lr", 1e-5, 1e-2, log=True),
+        "lr": trial.suggest_float("lr", 1e-6, 1e-3, log=True),  #Trial 1: 1e-5, 1e-2, too high keep going down
         "num_layers": trial.suggest_categorical("num_layers", [2, 3, 4]),
         "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128]),
         "dropout": trial.suggest_float("dropout", 0.0, 0.5),
