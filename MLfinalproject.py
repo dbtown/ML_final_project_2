@@ -53,7 +53,7 @@ RANDOM_SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Data Configuration
-NUM_SEQ = 500 #How many steps is the training window
+NUM_SEQ = 100 #How many steps is the training window
 PRED_STEPS = 5 ######How many steps to predict, if you change this you have to change GRU output size as well!!!!
 
 # Search space for hyperparameter tuning
@@ -76,6 +76,37 @@ MAX_EPOCHS = 15
 data_path = Path(f"./data new/{OUTPUT_TYPE}_orbit_300164_timeseries.csv")
 data_path_rv = Path(f"./data new/rv_orbit_300164_timeseries.csv")        #Add rv path for the baseline but try inputting coes into the GRU, also create coes to rv to plot GRU's rvs
 
+def angle_to_sin_cos(data):
+    a = data[:, 0:1]
+    e = data[:, 1:2]
+
+    #Angles
+    i_angle = data[:, 2:3]
+    raan_angle = data[:, 3:4]
+    argp_angle = data[:,4:5]
+    nu_angle = data[:,5:6]
+
+    return np.concatenate([
+        a,e,
+        np.sin(i_angle), np.cos(i_angle),
+        np.sin(raan_angle), np.cos(raan_angle),
+        np.sin(argp_angle), np.cos(argp_angle),
+        np.sin(nu_angle), np.cos(nu_angle),
+    ])
+
+def sin_cos_to_angle(data_10d):
+    a = data_10d[...,0:1]
+    e = data_10d[...,0:1]
+
+    def get_angle(sin_val, cos_val):
+        angle = np.arctan2(sin_val, cos_val)
+        return np.where(angle < 0, angle + 2*np.pi, angle)
+    i_angle = get_angle(data_10d[...,2:3], data_10d[...,3:4])
+    raan_angle = get_angle(data_10d[...,4:5], data_10d[...,5:6])
+    argp_angle = get_angle(data_10d[...,6:7], data_10d[...,7:8])
+    nu_angle = get_angle(data_10d[...,8:9], data_10d[...,9:10])
+
+    return np.concatenate([a,e,i_angle,raan_angle,argp_angle,nu_angle], axis=-1)
 
 def load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS):
     """
@@ -88,11 +119,15 @@ def load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS):
     df = pd.read_csv(data_path)
     if OUTPUT_TYPE == "coe":
         feature_names = ["Semimajor Axis", "Eccentricity", "Inclination", "RAAN", "Argument of Perigee", "True Anomaly"]
-    if OUTPUT_TYPE == "rv":
+        states = df[feature_names].values
+        states = angle_to_sin_cos(states)
+        feature_names = ["a", "e", "si", "ci", "sraan", "craan", "sargp", "cargp", "snu","cnu"]
+    elif OUTPUT_TYPE == "rv":
         feature_names = ["Rx", "Ry", "Rz", "Vx", "Vy", "Vz"]
-    else:
-        raise ValueError("Invalid OUTPUT_TYPE. Must be 'coe' or 'rv'.")
-    states = df[feature_names].values
+        states = df[feature_names].values
+    # else:
+    #     raise ValueError("Invalid OUTPUT_TYPE. Must be 'coe' or 'rv'.")
+    
 
     # No cleaning needed except normalization, as well as no feature engineering needed.
 
@@ -154,14 +189,15 @@ class GRUPredictor(nn.Module):
             "num_layers": num_layers,
             "dropout": dropout
         }
+        self.input_dim = 10 if OUTPUT_TYPE == "coe" else 6
 
-        self.gru = nn.GRU(6, self.config["hidden_size"], self.config["num_layers"], batch_first=True, dropout=self.config["dropout"])
-        self.fc = nn.Linear(self.config["hidden_size"], 6*5)
+        self.gru = nn.GRU(self.input_dim, self.config["hidden_size"], self.config["num_layers"], batch_first=True, dropout=self.config["dropout"])
+        self.fc = nn.Linear(self.config["hidden_size"], self.input_dim*PRED_STEPS)
 
     def forward(self, x):
         output, hidden = self.gru(x)
         output = self.fc(output[:,-1,:])
-        output = output.view(-1, 5, 6)
+        output = output.view(-1, PRED_STEPS, self.input_dim)
 
         return output
     
@@ -389,22 +425,51 @@ def visualize_predictions(model, val_loader, scaler, dt):
     X_batch, y_batch = next(iter(val_loader))
     X_example = X_batch[0:1].to(DEVICE)
 
-    truth_future = y_batch[0].cpu().numpy()
+    truth_future_scaled = y_batch[0].cpu().numpy()
 
     with torch.no_grad():
         pred_raw = model(X_example)
         pred_np = pred_raw.detach().cpu().numpy()[0]
 
-    pred_future = scaler.inverse_transform(pred_np)
-    truth_future = scaler.inverse_transform(truth_future)
+    #New stuff
+    pred_future10d = scaler.inverse_transform(pred_np)
+    truth_future10d = scaler.inverse_transform(truth_future_scaled)
+    initial_states10d = scaler.inverse_transform(X_example[0,-1,:].cpu().numpy().reshape(1,-1)[0])
 
-    initial_states_scaled = X_example[0,-1,:].cpu().numpy()
-    initial_state = scaler.inverse_transform(initial_states_scaled.reshape(1,-1))[0]
+
+    # pred_future = scaler.inverse_transform(pred_np)
+    # truth_future = scaler.inverse_transform(truth_future)
+
+    # initial_states_scaled = X_example[0,-1,:].cpu().numpy()
+    # initial_state = scaler.inverse_transform(initial_states_scaled.reshape(1,-1))[0]
+
+    
 
     if OUTPUT_TYPE == "coe":
-        initial_state = coes_to_rv(initial_state)
-        pred_future = coes_to_rv(pred_future)
-    
+        pred_future = sin_cos_to_angle(pred_future10d)
+        truth_future = sin_cos_to_angle(truth_future10d)
+        initial_state = sin_cos_to_angle(initial_states10d.reshape(1,-1))[0]
+
+        coe_error = np.abs(pred_future - truth_future)
+        print("Mean Error in a:", np.mean(coe_error[:,0]))
+        print("Mean Error in e:", np.mean(coe_error[:,1]))
+        print("Mean Error in i:", np.mean(coe_error[:,2]))
+        print("Mean Error in raan:", np.mean(coe_error[:,3]))
+        print("Mean Error in argp:", np.mean(coe_error[:,4]))
+        print("Mean Error in nu:", np.mean(coe_error[:,5]))
+        
+        initial_state_rv = coes_to_rv(initial_state)
+
+        pred_rv = np.zeros((PRED_STEPS, 6))
+        truth_rv = np.zeros((PRED_STEPS, 6))
+        for i in range(PRED_STEPS):
+            pred_rv[i] = coes_to_rv(pred_future[i])
+            truth_rv[i] = coes_to_rv(truth_future[i])
+        pred_future = pred_rv
+        truth_future = truth_rv
+        initial_state = initial_state_rv
+    else:
+        print("not implemented yet, make edits")
 
     baseline_future = prop_20_steps(initial_state,dt)
 
