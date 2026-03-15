@@ -41,7 +41,7 @@ import wandb
 
 # Flags
 USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
-OUTPUT_TYPE = "rv"  # "coe" for classical orbital elements, "rv" for radial velocity data
+OUTPUT_TYPE = "coe"  # "coe" for classical orbital elements, "rv" for radial velocity data
 RUN_OPTUNA_SEARCH = True
 RUN_BASELINE = True
 RUN_TEST_SET = False
@@ -53,12 +53,12 @@ RANDOM_SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Data Configuration
-NUM_SEQ = 10 #How many steps is the training window
+NUM_SEQ = 500 #How many steps is the training window
 PRED_STEPS = 5 ######How many steps to predict, if you change this you have to change GRU output size as well!!!!
 
 # Search space for hyperparameter tuning
 NUM_SAMPLES = 10
-MAX_EPOCHS = 100
+MAX_EPOCHS = 15
 
 
 
@@ -349,6 +349,40 @@ def prop_20_steps(initial_state, dt, steps=PRED_STEPS):
     future_states = sol.y.T[1:]
     return future_states
 
+def coes_to_rv(elements, MU = 398600.4418e9):
+    a,e,i,raan,argp,nu = elements
+
+    p = a*(1-e**2)
+    h = np.sqrt(MU*p)
+    r_mag = p/(1+e*np.cos(nu))
+    r_pqw = np.array([
+        r_mag*np.cos(nu),
+        r_mag*np.sin(nu),
+        0
+    ])
+
+    v_pqw = np.array([
+        (MU/h)*-np.sin(nu),
+        (MU/h)*(e+np.cos(nu)),
+        0
+    ])
+    c0,s0 = np.cos(raan),np.sin(raan)
+    ci,si = np.cos(i), np.sin(i)
+    cw,sw = np.cos(argp), np.sin(argp)
+
+    R = np.array([
+        [c0*cw-s0*sw*ci, -c0*sw-s0*cw*ci, s0*si],
+        [s0*cw+c0*sw*ci, -s0*sw+c0*cw*ci, -c0*si],
+        [sw*si, cw*si, ci]
+    ])
+
+    r_ijk = R @ r_pqw
+    v_ijk = R @ v_pqw
+
+    states = np.concatenate([r_ijk, v_ijk])
+
+    return states
+
 def visualize_predictions(model, val_loader, scaler, dt):
     model.eval()
 
@@ -366,6 +400,11 @@ def visualize_predictions(model, val_loader, scaler, dt):
 
     initial_states_scaled = X_example[0,-1,:].cpu().numpy()
     initial_state = scaler.inverse_transform(initial_states_scaled.reshape(1,-1))[0]
+
+    if OUTPUT_TYPE == "coe":
+        initial_state = coes_to_rv(initial_state)
+        pred_future = coes_to_rv(pred_future)
+    
 
     baseline_future = prop_20_steps(initial_state,dt)
 
