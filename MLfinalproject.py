@@ -45,8 +45,8 @@ import wandb
 # Flags
 USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
 OUTPUT_TYPE = "rv"  # "coe" for classical orbital elements, "rv" for radial velocity data
-RUN_OPTUNA_SEARCH = True
-RUN_BASELINE = False
+RUN_OPTUNA_SEARCH = False
+RUN_BASELINE = True
 RUN_TEST_SET = False
 
 
@@ -272,12 +272,14 @@ def get_search_space(trial: optuna.Trial):
     """
     Define search space for optuna search
     """
+    #by Trial 3 is seemed that by far the lr had the most to do with how it performed. Tuning in the lr initially led to all around lower RMSE values. Then, when that was tuned other patterns started to emerge like num_layers was generally better when it was lower and dropout was also generally better when it within 0.1 to 0.3. 
+    #Hidden size also started to show strong correlations by trial 3 that lower hidden_size made for best results.
     config = {
-        "lr": trial.suggest_float("lr", 1e-6, 1e-3, log=True),  #Trial 1: 1e-5, 1e-2, too high keep going down
-        "num_layers": trial.suggest_categorical("num_layers", [2, 3, 4]),
-        "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128]),
-        "dropout": trial.suggest_float("dropout", 0.0, 0.5),
-        "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128])
+        "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),  #Trial 1: 1e-6, 1e-3, very low learning rates do not perform well.    #Trial 2: 1e-5, 1e-2 extreme lows definitely mean poor performance #Trial 3: 1e-4,1e-2 definitely dominates performance
+        "num_layers": trial.suggest_categorical("num_layers", [1, 2, 3]), #Trial 1: 2,3,4, whenever the learning rate wasn't really low, the higher layers seemed to perform better  #Trial 2: 3,4,5 seems like it doesnt matter too much, if any favor the lower end. expanding the search. #Trial 3: 1,2,3,4,5 Its clear now that lower layers are better. shrinking.
+        "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128]), #Trial 1: didnt seem to matter   #Trial 2: didnt seem to matter   #Trial 3: 32,64,128 Lower seems better
+        "dropout": trial.suggest_float("dropout", 0.0, 0.5), #Trial 1: didnt seem to matter   #Trial 2: didnt seem to matter   #Trial 3: 0,0,5 between 0.1 and 0.35 seems optimal
+        "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]) #Trial 1: didnt seem to matter    #Trial 2: didnt seem to matter    #Trial 3: no correlation
     }
     return config
 
@@ -454,6 +456,7 @@ def main():
     if RUN_OPTUNA_SEARCH:
         optuna_study = run_search(n_trials=NUM_SAMPLES)
         best_params = optuna_study.best_trial.params
+        model = create_model(best_params)
         save_model(model, best_params)
 
     if RUN_BASELINE:
@@ -474,8 +477,6 @@ def main():
         criterion = nn.MSELoss()
         test_loss, test_rmse = evaluate(best_model, test_loader, criterion, DEVICE)
         print(f"Test RMSE: {test_rmse:.4f}")
-
-
 
 main()
 
