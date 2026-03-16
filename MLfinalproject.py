@@ -43,8 +43,9 @@ import wandb
 USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
 USE_COE = False  # "coe" for classical orbital elements, "rv" for radial velocity data
 RUN_OPTUNA_SEARCH = False
-RUN_BASELINE = False
-RUN_TEST_SET = True
+RUN_BASELINE = True
+RUN_TEST_SET = False
+RUN_TRAINING = True
 
 
 # Constants
@@ -58,7 +59,8 @@ PRED_STEPS = 5 ######How many steps to predict, if you change this you have to c
 
 # Search space for hyperparameter tuning
 NUM_SAMPLES = 10
-MAX_EPOCHS = 100
+MAX_EPOCHS = 15
+MAX_TRAINING_EPOCHS = 100
 
 
 
@@ -313,9 +315,9 @@ def search_objective(trial: optuna.Trial):
         best_val_rmse = min(best_val_rmse, val_rmse)
         progress_bar.set_postfix({"val_rmse": f"{val_rmse:.4f}", "new best": f"{best_val_rmse:.4f}"})
 
-    trial.report(val_rmse, step)
-    if trial.should_prune():
-        raise optuna.TrialPruned()
+        trial.report(val_rmse, step)
+        if trial.should_prune():
+            raise optuna.TrialPruned()
     return best_val_rmse
 
 def run_search(n_trials: int = NUM_SAMPLES):
@@ -410,7 +412,6 @@ def visualize_predictions(model, val_loader, scaler, dt):
     baseline_future = prop_20_steps(initial_state,dt)
 
     truth_r = truth_future[:,:3]
-    print(truth_r.shape)
     gru_r = pred_future[:,:3]
     baseline_r = baseline_future[:,:3]
 
@@ -473,9 +474,24 @@ def main():
         best_params = optuna_study.best_trial.params
         model = create_model(best_params)
         save_model(model, best_params)
+    
+    if RUN_TRAINING:
+        _, best_params = load_model(path="final_best_gru_model.pth")
+        train_ds, val_ds, test_ds, _, scaler = load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
+        train_loader, val_loader, _ = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
+        model = create_model(best_params).to(DEVICE)
+        criterion = nn.MSELoss()
+        optimizer = optim.Adam(model.parameters(), lr=best_params["lr"])
+
+        for epoch in range(MAX_TRAINING_EPOCHS):
+            train_epoch(model, train_loader, criterion, optimizer, DEVICE)
+            val_loss, val_rmse = evaluate(model, val_loader, criterion, DEVICE)
+            print(f"Epoch {epoch+1}/{MAX_TRAINING_EPOCHS} = Val RMSE: {val_rmse:.4f}")
+        save_model(model, best_params, path="trained_final_best_gru_model.pth")
+
 
     if RUN_BASELINE:
-        best_model, best_params = load_model(path="best_gru_model.pth")
+        best_model, best_params = load_model(path="trained_final_best_gru_model.pth")
         train_ds, val_ds, test_ds, _, scaler = load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
         _, val_loader, _ = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
 
@@ -483,9 +499,9 @@ def main():
         visualize_predictions(best_model, val_loader, scaler, dt)
 
     if RUN_TEST_SET:
-        best_model, best_params = load_model(path="final_best_gru_model.pth")
+        best_model, best_params = load_model(path="trained_final_best_gru_model.pth")
         train_ds, val_ds, test_ds, _, scaler = load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
-        _, _, test_loader = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
+        _, val_loader, test_loader = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
 
         # Testing eval
         criterion = nn.MSELoss()
