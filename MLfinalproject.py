@@ -41,13 +41,8 @@ import wandb
 
 # Flags
 USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
-<<<<<<< HEAD
-USE_COE = True  # "coe" for classical orbital elements, "rv" for radial velocity data
+USE_COE = False  # "coe" for classical orbital elements, "rv" for radial velocity data
 RUN_OPTUNA_SEARCH = False
-=======
-OUTPUT_TYPE = "rv"  # "coe" for classical orbital elements, "rv" for radial velocity data
-RUN_OPTUNA_SEARCH = True
->>>>>>> parent of 2663ed7 (Long run of 100 max epochs did fix anything)
 RUN_BASELINE = True
 RUN_TEST_SET = False
 
@@ -58,11 +53,7 @@ RANDOM_SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Data Configuration
-<<<<<<< HEAD
-NUM_SEQ = 100 #How many steps is the training window
-=======
-NUM_SEQ = 10 #How many steps is the training window
->>>>>>> parent of 2663ed7 (Long run of 100 max epochs did fix anything)
+NUM_SEQ = 20 #How many steps is the training window
 PRED_STEPS = 5 ######How many steps to predict, if you change this you have to change GRU output size as well!!!!
 
 # Search space for hyperparameter tuning
@@ -85,7 +76,7 @@ MAX_EPOCHS = 100
 if USE_COE:
     data_path = Path(f"./data new/coe_orbit_300164_timeseries.csv")
 if USE_COE == False:
-    data_path_rv = Path(f"./data new/rv_orbit_300164_timeseries.csv")        #Add rv path for the baseline but try inputting coes into the GRU, also create coes to rv to plot GRU's rvs
+    data_path = Path(f"./data new/rv_orbit_300164_interpolated.csv")        #Add rv path for the baseline but try inputting coes into the GRU, also create coes to rv to plot GRU's rvs
 
 def angle_to_sin_cos(data):
     a = data[:, 0:1]
@@ -402,59 +393,24 @@ def visualize_predictions(model, val_loader, scaler, dt):
     X_batch, y_batch = next(iter(val_loader))
     X_example = X_batch[0:1].to(DEVICE)
 
-    truth_future_scaled = y_batch[0].cpu().numpy()
+    truth_future = y_batch[0].cpu().numpy()
 
     with torch.no_grad():
         pred_raw = model(X_example)
         pred_np = pred_raw.detach().cpu().numpy()[0]
 
     #New stuff
-    pred_future10d = scaler.inverse_transform(pred_np)
-    truth_future10d = scaler.inverse_transform(truth_future_scaled)
-    initial_states10d = scaler.inverse_transform(X_example[0,-1,:].cpu().numpy().reshape(1,-1)).flatten()
-
-
-<<<<<<< HEAD
-    # pred_future = scaler.inverse_transform(pred_np)
-    # truth_future = scaler.inverse_transform(truth_future)
-
-    # initial_states_scaled = X_example[0,-1,:].cpu().numpy()
-    # initial_state = scaler.inverse_transform(initial_states_scaled.reshape(1,-1))[0]
-
+    pred_future = scaler.inverse_transform(pred_np)
+    truth_future = scaler.inverse_transform(truth_future)
     
+    initial_states_scaled = X_example[0,-1,:].cpu().numpy()
+    initial_state = scaler.inverse_transform(initial_states_scaled.reshape(1,-1))[0]
 
-    if USE_COE:
-        pred_future = sin_cos_to_angle(pred_future10d)
-        truth_future = sin_cos_to_angle(truth_future10d)
-        print(initial_states10d)
-        initial_state = sin_cos_to_angle(initial_states10d.reshape(1,-1)).flatten()
-        print(initial_state)
-        coe_error = np.abs(pred_future - truth_future)
-        print("Mean Error in a:", np.mean(coe_error[:,0]))
-        print("Mean Error in e:", np.mean(coe_error[:,1]))
-        print("Mean Error in i:", np.mean(coe_error[:,2]))
-        print("Mean Error in raan:", np.mean(coe_error[:,3]))
-        print("Mean Error in argp:", np.mean(coe_error[:,4]))
-        print("Mean Error in nu:", np.mean(coe_error[:,5]))
-        
-        initial_state_rv = coes_to_rv(initial_state)
 
-        pred_rv = np.zeros((PRED_STEPS, 6))
-        truth_rv = np.zeros((PRED_STEPS, 6))
-        for i in range(PRED_STEPS):
-            pred_rv[i] = coes_to_rv(pred_future[i])
-            truth_rv[i] = coes_to_rv(truth_future[i])
-        pred_future = pred_rv
-        truth_future = truth_rv
-        initial_state = initial_state_rv
-    else:
-        print("not implemented yet, make edits")
-
-=======
->>>>>>> parent of 2663ed7 (Long run of 100 max epochs did fix anything)
     baseline_future = prop_20_steps(initial_state,dt)
 
     truth_r = truth_future[:,:3]
+    print(truth_r.shape)
     gru_r = pred_future[:,:3]
     baseline_r = baseline_future[:,:3]
 
