@@ -43,8 +43,8 @@ import wandb
 USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
 USE_COE = False  # "coe" for classical orbital elements, "rv" for radial velocity data
 RUN_OPTUNA_SEARCH = False
-RUN_BASELINE = True
-RUN_TEST_SET = False
+RUN_BASELINE = False
+RUN_TEST_SET = True
 
 
 # Constants
@@ -76,7 +76,7 @@ MAX_EPOCHS = 100
 if USE_COE:
     data_path = Path(f"./data new/coe_orbit_300164_timeseries.csv")
 if USE_COE == False:
-    data_path = Path(f"./data new/rv_orbit_300164_interpolated.csv")        #Add rv path for the baseline but try inputting coes into the GRU, also create coes to rv to plot GRU's rvs
+    data_path = Path(f"./data new/rv_orbit_300164_timeseries.csv")        #Add rv path for the baseline but try inputting coes into the GRU, also create coes to rv to plot GRU's rvs
 
 def angle_to_sin_cos(data):
     a = data[:, 0:1]
@@ -402,7 +402,7 @@ def visualize_predictions(model, val_loader, scaler, dt):
     #New stuff
     pred_future = scaler.inverse_transform(pred_np)
     truth_future = scaler.inverse_transform(truth_future)
-    
+
     initial_states_scaled = X_example[0,-1,:].cpu().numpy()
     initial_state = scaler.inverse_transform(initial_states_scaled.reshape(1,-1))[0]
 
@@ -443,6 +443,7 @@ def visualize_predictions(model, val_loader, scaler, dt):
     plt.legend()
     plt.show()
     fig2.savefig(Path(f"./figures/Error Plot"))
+    print(f"Results visualized")
 
 # ============================================================================
 # Step 7: Present Results
@@ -482,14 +483,17 @@ def main():
         visualize_predictions(best_model, val_loader, scaler, dt)
 
     if RUN_TEST_SET:
-        best_model, best_params = load_model(path="best_gru_model.pth")
-        train_ds, val_ds, test_ds, _, _= load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
+        best_model, best_params = load_model(path="final_best_gru_model.pth")
+        train_ds, val_ds, test_ds, _, scaler = load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
         _, _, test_loader = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
 
         # Testing eval
         criterion = nn.MSELoss()
         test_loss, test_rmse = evaluate(best_model, test_loader, criterion, DEVICE)
         print(f"Test RMSE: {test_rmse:.4f}")
+
+        dt = 3599.178006 #calculated
+        visualize_predictions(best_model, test_loader, scaler, dt)
 
 main()
 
