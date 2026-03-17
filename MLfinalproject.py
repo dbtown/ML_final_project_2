@@ -43,9 +43,9 @@ import wandb
 USE_WANDB = True  # Set to True to use Weights & Biases for experiment tracking
 USE_COE = False  # "coe" for classical orbital elements, "rv" for radial velocity data
 RUN_OPTUNA_SEARCH = False
+RUN_TRAINING = False
 RUN_BASELINE = True
 RUN_TEST_SET = False
-RUN_TRAINING = True
 
 
 # Constants
@@ -54,7 +54,7 @@ RANDOM_SEED = 42
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Data Configuration
-NUM_SEQ = 20 #How many steps is the training window
+NUM_SEQ = 100 #How many steps is the training window
 PRED_STEPS = 5 ######How many steps to predict, if you change this you have to change GRU output size as well!!!!
 
 # Search space for hyperparameter tuning
@@ -197,9 +197,11 @@ class GRUPredictor(nn.Module):
 
         self.gru = nn.GRU(self.input_dim, self.config["hidden_size"], self.config["num_layers"], batch_first=True, dropout=self.config["dropout"])
         self.fc = nn.Linear(self.config["hidden_size"], self.input_dim*PRED_STEPS)
+        self.dp = nn.Dropout(self.config["dropout"])
 
     def forward(self, x):
         output, hidden = self.gru(x)
+        output = self.dp(output)
         output = self.fc(output[:,-1,:])
         output = output.view(-1, PRED_STEPS, self.input_dim)
 
@@ -284,9 +286,9 @@ def get_search_space(trial: optuna.Trial):
     #by Trial 3 is seemed that by far the lr had the most to do with how it performed. Tuning in the lr initially led to all around lower RMSE values. Then, when that was tuned other patterns started to emerge like num_layers was generally better when it was lower and dropout was also generally better when it within 0.1 to 0.3. 
     #Hidden size also started to show strong correlations by trial 3 that lower hidden_size made for best results.
     config = {
-        "lr": trial.suggest_float("lr", 1e-4, 1e-2, log=True),  #Trial 1: 1e-6, 1e-3, very low learning rates do not perform well.    #Trial 2: 1e-5, 1e-2 extreme lows definitely mean poor performance #Trial 3: 1e-4,1e-2 definitely dominates performance
-        "num_layers": trial.suggest_categorical("num_layers", [2, 3]), #Trial 1: 2,3,4, whenever the learning rate wasn't really low, the higher layers seemed to perform better  #Trial 2: 3,4,5 seems like it doesnt matter too much, if any favor the lower end. expanding the search. #Trial 3: 1,2,3,4,5 Its clear now that lower layers are better. shrinking. #Trial 6: 2,3,4 only good ones seem to be in layers 2 and 3
-        "hidden_size": trial.suggest_categorical("hidden_size", [32, 64, 128]), #Trial 1: didnt seem to matter   #Trial 2: didnt seem to matter   #Trial 3: 32,64,128 Lower seems better
+        "lr": trial.suggest_float("lr", 1e-5, 1e-2, log=True),  #Trial 1: 1e-6, 1e-3, very low learning rates do not perform well.    #Trial 2: 1e-5, 1e-2 extreme lows definitely mean poor performance #Trial 3: 1e-4,1e-2 definitely dominates performance
+        "num_layers": trial.suggest_categorical("num_layers", [2]), #Trial 1: 2,3,4, whenever the learning rate wasn't really low, the higher layers seemed to perform better  #Trial 2: 3,4,5 seems like it doesnt matter too much, if any favor the lower end. expanding the search. #Trial 3: 1,2,3,4,5 Its clear now that lower layers are better. shrinking. #Trial 6: 2,3,4 only good ones seem to be in layers 2 and 3
+        "hidden_size": trial.suggest_categorical("hidden_size", [128]), #Trial 1: didnt seem to matter   #Trial 2: didnt seem to matter   #Trial 3: 32,64,128 Lower seems better
         "dropout": trial.suggest_float("dropout", 0.0, 0.2), #Trial 1: didnt seem to matter   #Trial 2: didnt seem to matter   #Trial 3: 0,0,5 between 0.0 and 0.2 seems optimal
         "batch_size": trial.suggest_categorical("batch_size", [32, 64, 128]) #Trial 1: didnt seem to matter    #Trial 2: didnt seem to matter    #Trial 3: no correlation
     }
@@ -394,6 +396,7 @@ def visualize_predictions(model, val_loader, scaler, dt):
 
     X_batch, y_batch = next(iter(val_loader))
     X_example = X_batch[0:1].to(DEVICE)
+    print(X_example.shape)
 
     truth_future = y_batch[0].cpu().numpy()
 
@@ -446,6 +449,12 @@ def visualize_predictions(model, val_loader, scaler, dt):
     fig2.savefig(Path(f"./figures/Error Plot"))
     print(f"Results visualized")
 
+    predict_physics_rmse = np.mean(baseline_error)
+    predict_model_rmse = np.mean(gru_error)
+    print(f"Baseline Avg Error: {predict_physics_rmse:.4f}")
+    print(f"GRU Avg Error: {predict_model_rmse:.4f}")
+
+
 # ============================================================================
 # Step 7: Present Results
 # ============================================================================
@@ -473,10 +482,10 @@ def main():
         optuna_study = run_search(n_trials=NUM_SAMPLES)
         best_params = optuna_study.best_trial.params
         model = create_model(best_params)
-        save_model(model, best_params)
+        save_model(model, best_params, path="gru_model_all.pth")
     
     if RUN_TRAINING:
-        _, best_params = load_model(path="final_best_gru_model.pth")
+        _, best_params = load_model(path="gru_model_all.pth")
         train_ds, val_ds, test_ds, _, scaler = load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
         train_loader, val_loader, _ = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
         model = create_model(best_params).to(DEVICE)
@@ -484,14 +493,14 @@ def main():
         optimizer = optim.Adam(model.parameters(), lr=best_params["lr"])
 
         for epoch in range(MAX_TRAINING_EPOCHS):
-            train_epoch(model, train_loader, criterion, optimizer, DEVICE)
+            train_loss, train_rmse = train_epoch(model, train_loader, criterion, optimizer, DEVICE)
             val_loss, val_rmse = evaluate(model, val_loader, criterion, DEVICE)
-            print(f"Epoch {epoch+1}/{MAX_TRAINING_EPOCHS} = Val RMSE: {val_rmse:.4f}")
-        save_model(model, best_params, path="trained_final_best_gru_model.pth")
+            print(f"Epoch {epoch+1}/{MAX_TRAINING_EPOCHS} === Train RMSE: {train_rmse:.4f} === Val RMSE: {val_rmse:.4f}")
+        save_model(model, best_params, path="gru_model_all.pth")
 
 
     if RUN_BASELINE:
-        best_model, best_params = load_model(path="trained_final_best_gru_model.pth")
+        best_model, best_params = load_model(path="gru_model_all.pth")
         train_ds, val_ds, test_ds, _, scaler = load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
         _, val_loader, _ = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
 
@@ -499,7 +508,7 @@ def main():
         visualize_predictions(best_model, val_loader, scaler, dt)
 
     if RUN_TEST_SET:
-        best_model, best_params = load_model(path="trained_final_best_gru_model.pth")
+        best_model, best_params = load_model(path="best_gru_model_all.pth")
         train_ds, val_ds, test_ds, _, scaler = load_and_prepare_orbit_data(data_path, NUM_SEQ, PRED_STEPS)
         _, val_loader, test_loader = construct_dataloaders(train_ds, val_ds, test_ds, best_params["batch_size"])
 
@@ -507,6 +516,7 @@ def main():
         criterion = nn.MSELoss()
         test_loss, test_rmse = evaluate(best_model, test_loader, criterion, DEVICE)
         print(f"Test RMSE: {test_rmse:.4f}")
+        print(best_params)
 
         dt = 3599.178006 #calculated
         visualize_predictions(best_model, test_loader, scaler, dt)
